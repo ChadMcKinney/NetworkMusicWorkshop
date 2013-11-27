@@ -45,7 +45,8 @@ OSCthulhu {
 
 		// Add login responder
 		OSCdef.new(\loginUserName, {
-			|msg, time, addr, recvPortg| msg.postln; userName = msg[1]; ("Logged into OSCthulhu as: " ++ userName).postln;
+			|msg, time, addr, recvPortg| msg.postln; userName = msg[1];
+			("Logged into OSCthulhu as: " ++ userName).postln;
 		}, '/userName', oscthulhuAddr);
 
 		if(piece.isNil,{
@@ -209,8 +210,6 @@ OSCthulhuSyncObject {
 		this.objectsubGroup = objectsubGroup;
 		this.values = values;
 
-		"OSCthulhuSyncObject.init".postln;
-
 		// Default nil update function
 		updateFunction = { |values| ^nil };
 	}
@@ -237,6 +236,10 @@ OSCthulhuSyncObject {
 OSCthulhuSubGroupMapper {
 	classvar syncMaps;
 
+	*initClass {
+		StartUp.add { OSCthulhuSubGroupMapper.init; }
+	}
+
 	// Initalized OSCthulhu with the SubGroupMapper functions
 	*init {
 		syncMaps = Dictionary.new;
@@ -251,12 +254,11 @@ OSCthulhuSubGroupMapper {
 			// [2] Group
 			// [3] SubGroup
 			// [4] arguments
-			var map = syncMaps[msg[3]];
-			"SubGroupMapper.onAddSyncObject".postln;
+
+			var map = syncMaps.at(msg[3].asSymbol);
 			if(map.notNil, {
-				map.networkAdd(msg[1], msg[4]);
+				map.networkAdd(msg[1], [msg[4]]);
 			});
-			msg.postln;
 		});
 
 		OSCthulhu.onSetSyncArg(\SGMapperSetArg, {
@@ -270,12 +272,11 @@ OSCthulhuSubGroupMapper {
 			// [3] value
 			// [4] group
 			// [5] subgroup
-			var map = syncMaps[msg[5]];
+			var map = syncMaps.at(msg[5].asSymbol);
 
 			if(map.notNil, {
 				map.networkSet(msg[1], msg[2], msg[3]);
 			});
-			msg.postln;
 		});
 
 		OSCthulhu.onRemoveSyncObject(\SGMapperRemovObject, {
@@ -287,12 +288,11 @@ OSCthulhuSubGroupMapper {
 			// [1] Object name
 			// [2] group
 			// [3] subgroup
-			var map = syncMaps[msg[3]];
+			var map = syncMaps.at(msg[3].asSymbol);
 
 			if(map.notNil, {
 				map.networkRemove(msg[1]);
 			});
-			msg.postln;
 		});
 	}
 
@@ -301,7 +301,7 @@ OSCthulhuSubGroupMapper {
 	}
 
 	*addSubGroup { arg subGroup;
-		syncMaps.put(subGroup.groupName, subGroup);
+		syncMaps[subGroup.groupName.asSymbol] = subGroup;
 	}
 
 	*update {
@@ -316,20 +316,21 @@ OSCthulhuSubGroupMapper {
 OSCthulhuSyncMap {
 	var map;
 	var <>groupName;
-	var syncClass;
+	var <>syncClass;
 
-	*new { arg groupName;
-		^super.new.init(groupName);
+	*new { arg groupName, syncClass = syncClass ? OSCthulhuSyncObject;
+		^super.new.init(groupName, syncClass);
 	}
 
 	init { arg groupName, syncClass = syncClass ? OSCthulhuSyncObject;
 		this.groupName = groupName;
+		this.syncClass = syncClass;
 		map = Dictionary.new;
 		OSCthulhuSubGroupMapper.addSubGroup(this);
 	}
 
 	add { arg objectName, values;
-		OSCthulhu.addSyncObject(objectName, OSCthulhu.piece, groupName, values);
+		OSCthulhu.addSyncObject(objectName, OSCthulhu.piece ? "SuperCollider", groupName, values);
 	}
 
 	remove { arg objectName;
@@ -337,7 +338,7 @@ OSCthulhuSyncMap {
 	}
 
 	get { arg objectName;
-		^map[objectName];
+		^map.at(objectName);
 	}
 
 	set { arg objectName, argumentIndex, value;
@@ -356,33 +357,29 @@ OSCthulhuSyncMap {
 	}
 
 	networkRemove { arg objectName;
-		map[objectName].networkRemove; // call cleanup function
-		map.removeAt(objectName);
+		map.at(objectName.asSymbol).networkRemove; // call cleanup function
+		map.removeAt(objectName.asSymbol);
 	}
 
 	networkSet { arg objectName, index, value;
-		map[objectName].networkSet(index, value);
+		map.at(objectName.asSymbol).networkSet(index, value);
 	}
 }
 
+// A synchronized wrapper for Synth
 OSCthulhuSyncSynth : OSCthulhuSyncObject {
 
 	var synth;
 
 	init { arg objectName, objectsubGroup, values;
+		// This calls the constructor for the parent class, OSCthulhuSyncObject
 		super.init(objectName, objectsubGroup, values);
-		synth = Synth.new(objectsubGroup);
-		"OSCthulhuSyncSynth.init".postln;
-		values.do {
-			|argumentIndex, argumentValue|
-			this.set(argumentIndex, argumentValue);
-		}
+		synth = Synth.new(objectsubGroup, values.collect { |item, i| [i, item] }.flat);
 	}
 
 	// Override network set value
 	networkSet { arg index, value;
-		// 15 = n_set, ie set the synth
-		Server.default.sendMsg(15, synth.nodeID, index, value);
+		synth.set(index, value);
 	}
 
 	networkRemove {
